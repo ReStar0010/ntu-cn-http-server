@@ -73,5 +73,90 @@ int main(int argc, char *argv[]){
     fds[0].events = POLLIN;
     cout << "Server is listening on port " << port << "..." << endl;
     // NOTE: poll main loop
+    while(true){
+        int events_number = poll(fds, MAX_CLIENTS, -1);
+        if(events_number == -1){
+            cerr << "Poll error: " << strerror(errno) << endl;
+            break;
+        }
+        if(fds[0].revents & POLL_IN){
+            // NOTE: accept new connection(non blocking)
+            while(true){
+                struct sockaddr_in client_addr;
+                socklen_t client_len = sizeof(client_addr);
+                int client_fd = accept(server_fd, (struct sockaddr*)&client_addr, &client_len);
+                if(client_fd < 0){
+                    cerr << "Accept failed: " << strerror(errno) << endl;
+                    break;
+                }
+                // NOTE: set non-blocking mode for client socket
+                if(fcntl(client_fd, F_SETFL, O_NONBLOCK) < 0){
+                    cerr << "Set non-blocking mode failed: " << strerror(errno) << endl;
+                    close(client_fd);
+                    continue;
+                }
+                // NOTE: add client into pollfd
+                int i;
+                for(i=1;i<MAX_CLIENTS;i++){
+                    if(fds[i].fd == -1){
+                        fds[i].fd = client_fd;
+                        fds[i].events = POLL_IN;
+                        cout << "New connection from " << inet_ntoa(client_addr.sin_addr) 
+                             << ":" << ntohs(client_addr.sin_port) << " assigned to fd " << client_fd << endl;
+                        break;
+                    }
+                }
+                if(i == MAX_CLIENTS){
+                    cerr << "Max clients reached, rejecting connection from " 
+                         << inet_ntoa(client_addr.sin_addr) << ":" << ntohs(client_addr.sin_port) << endl;
+                    close(client_fd);
+                }
+            }
+        }
+        else{
+            // NOTE: check client sockets
+            for(int i=1;i<MAX_CLIENTS;i++){
+                if(fds[i].fd == -1)
+                    continue;
+                if(fds[i].revents & POLLIN){
+                    char buffer[1024];
+                    memset(buffer, 0, sizeof(buffer));
+                    ssize_t bytes_read = read(fds[i].fd, buffer, sizeof(buffer));
+                    if(bytes_read < 0){
+                        cerr << "Read error on fd " << fds[i].fd << ": " << strerror(errno) << endl;
+                        close(fds[i].fd);
+                        fds[i].fd = -1;
+                        continue;
+                    }
+                    else if(bytes_read == 0){
+                        cout << "Client on fd " << fds[i].fd << " disconnected." << endl;
+                        close(fds[i].fd);
+                        fds[i].fd = -1;
+                        continue;
+                    }
+                    else{
+                        cout << "Received " << bytes_read << " bytes from fd " << fds[i].fd << ": " << string(buffer, bytes_read) << endl;
+                        // FIX: Add HTTP parser here
+                        const char* response = 
+                            "HTTP/1.1 200 OK\r\n"
+                            "Server: CN2025Server/1.0\r\n" // 
+                            "Content-Type: text/plain\r\n"
+                            "Content-Length: 12\r\n"
+                            "Connection: Close\r\n" // [cite: 199]
+                            "\r\n"
+                            "Hello World\n";
+                        ssize_t bytes_sent = write(fds[i].fd, response, strlen(response));
+                        close(fds[i].fd);
+                        fds[i].fd = -1;
+                    }
+                }
+            }
+        }
+    }
+    // NOTE: end of poll loop
+    for(int i=0;i<MAX_CLIENTS;i++){
+        close(fds[i].fd);
+        fds[i].fd = -1;
+    }
     return 0;
 }
