@@ -21,6 +21,7 @@ struct ClientState{
     string read_buffer;
     string write_buffer;
     size_t bytes_sent;
+    bool keep_alive;
 };
 typedef struct ClientState ClientState;
 void initial_client(ClientState &client){
@@ -28,6 +29,7 @@ void initial_client(ClientState &client){
     client.read_buffer.clear();
     client.write_buffer.clear();
     client.bytes_sent = 0;
+    client.keep_alive = true;
 }
 void clear_client(ClientState &client){
     client.fd = -1;
@@ -180,6 +182,16 @@ int main(int argc, char *argv[]){
                                 version = request_str.substr(path_end + 1);
                             }
                         }
+                        // NOTE: parse Keep-alive header
+                        clients[i].keep_alive = true;
+                        size_t keep_live_pos = request_str.find("Connection:");
+                        if(keep_live_pos != string::npos){
+                            size_t line_end = request_str.find("\r\n", keep_live_pos);
+                            string connection_line = request_str.substr(keep_live_pos, line_end - keep_live_pos);
+                            if(connection_line.find("close") != string::npos || connection_line.find("Close") != string::npos){
+                                clients[i].keep_alive = false;
+                            }
+                        }
                         // NOTE: routing path
                         string status_line;
                         string content_type;
@@ -272,6 +284,11 @@ int main(int argc, char *argv[]){
                         response += status_line;
                         response += "Server: CN2025Server/1.0\r\n";
                         response += content_type;
+                        if (clients[i].keep_alive) {
+                            response += "Connection: keep-alive\r\n";
+                        } else {
+                            response += "Connection: Close\r\n";
+                        }
                         response += "Content-Length: " + to_string(body.size()) + "\r\n";
                         response += "\r\n";
                         response += body;
@@ -298,7 +315,14 @@ int main(int argc, char *argv[]){
                         cout << "All data sent to fd " << fds[i].fd << endl;
                         clients[i].write_buffer.clear();
                         clients[i].bytes_sent = 0;
-                        fds[i].events = POLLIN;
+                        if(clients[i].keep_alive){
+                            fds[i].events = POLL_IN;
+                        }
+                        else{
+                            cout << "Closing connection to fd " << fds[i].fd << " as per Connection: close header." << endl;
+                            close(fds[i].fd);
+                            clear_client(clients[i]);
+                        }
                     }
                     else{
                         cout << "Remaining " << clients[i].write_buffer.size() - clients[i].bytes_sent << " bytes to send to fd " << fds[i].fd << endl;   
