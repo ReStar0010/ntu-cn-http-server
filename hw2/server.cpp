@@ -11,17 +11,28 @@
 #include <netinet/in.h> 
 #include <arpa/inet.h>  
 #include <poll.h>       
+#include <map>
 #include <csignal>      
 #include <cerrno>       
 
 #define MAX_CLIENTS 101
 using namespace std;
+enum class ClientReqState{
+    READING_HEADER,
+    READING_BODY,
+    READING_COMPLETE
+};
 struct ClientState{
     int fd;
     string read_buffer;
     string write_buffer;
     size_t bytes_sent;
     bool keep_alive;
+    ClientReqState req_state;
+    size_t content_length; // which is body size
+    string method;
+    string path;
+    map<string, string> headers;
 };
 typedef struct ClientState ClientState;
 void initial_client(ClientState &client){
@@ -30,12 +41,182 @@ void initial_client(ClientState &client){
     client.write_buffer.clear();
     client.bytes_sent = 0;
     client.keep_alive = true;
+    client.req_state = ClientReqState::READING_HEADER;
+    client.content_length = 0;
+    client.method.clear();
+    client.path.clear();
+    client.headers.clear();
+
 }
 void clear_client(ClientState &client){
     client.fd = -1;
     client.read_buffer.clear();
     client.write_buffer.clear();
     client.bytes_sent = 0;
+    client.req_state = ClientReqState::READING_HEADER;
+    client.content_length = 0;
+    client.method.clear();
+    client.path.clear();
+    client.headers.clear();
+}
+void parse_header(ClientState &client, const string &header_strs){
+    client.headers.clear();
+    client.keep_alive = true; // default
+    stringstream ss(header_strs);
+    string line;
+    getline(ss, line);
+    // NOTE: parse first line
+    if (!line.empty() && line.back() == '\r') line.pop_back();
+    stringstream first_line_ss(line);
+    first_line_ss >> client.method >> client.path;
+    while(getline(ss, line)){
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if(line.empty()) break;
+        size_t colon_pos = line.find(':');
+        if(colon_pos != string::npos){
+            string key = line.substr(0, colon_pos);
+            string value = line.substr(colon_pos + 1);
+            // NOTE: trim space
+            key.erase(0, key.find_first_not_of("\t "));
+            key.erase(key.find_last_not_of("\t ") + 1);
+            value.erase(0, value.find_first_not_of("\t "));
+            value.erase(value.find_last_not_of("\t ") + 1);
+            for(char &C : key) C = tolower(C); // to lower case
+            client.headers[key] = value;
+        }
+    }
+    if(client.headers.find("connection") != client.headers.end()){
+        string conn_value = client.headers["connection"];
+        for(char &C : conn_value) C = tolower(C);
+        if(conn_value == "close"){
+            client.keep_alive = false;
+        }
+    }
+    client.content_length = 0;
+    if(client.headers.find("content-length") != client.headers.end()){
+        try{
+            client.content_length = stoul(client.headers["content-length"]);
+        }
+        catch(...){
+            client.content_length = 0;
+            cout << "Invalid Content-Length header value." << endl;
+        }
+    }
+}
+void process_http_request(ClientState &client){
+    // NOTE: routing path
+    string status_line;
+    string content_type;
+    string body;
+    string response;
+    if(client.method == "GET" && client.path == "/"){
+        ifstream ifs("web/index.html");
+        if(ifs){
+            stringstream ss;
+            ss << ifs.rdbuf();
+            body = ss.str();
+        }
+        else{
+            body = "<h1>Index file not found</h1>";
+        }
+        status_line = "HTTP/1.1 200 OK\r\n";
+        content_type = "Content-Type: text/html\r\n";
+    }
+    else if(client.method == "GET" && client.path == "/upload/file"){
+        ifstream ifs("web/uploadf.html");
+        if(ifs){
+            stringstream ss;
+            ss << ifs.rdbuf();
+            body = ss.str();
+        }
+        else{
+            body = "<h1>Upload file not found</h1>";
+        }
+        status_line = "HTTP/1.1 200 OK\r\n";
+        content_type = "Content-Type: text/html\r\n";
+    }
+    else if(client.method == "GET" && client.path == "/upload/video"){
+        ifstream ifs("web/uploadv.html");
+        if(ifs){
+            stringstream ss;
+            ss << ifs.rdbuf();
+            body = ss.str();
+        }
+        else{
+            body = "<h1>Upload video file not found</h1>";
+        }
+        status_line = "HTTP/1.1 200 OK\r\n";
+        content_type = "Content-Type: text/html\r\n";
+    }
+    else if(client.method == "GET" && client.path == "/file/"){
+        ifstream ifs("web/listf.rhtml");
+        if(ifs){
+            stringstream ss;
+            ss << ifs.rdbuf();
+            body = ss.str();
+        }
+        else{
+            body = "<h1>Not found(/file/)</h1>";
+        }
+        status_line = "HTTP/1.1 200 OK\r\n";
+        content_type = "Content-Type: text/html\r\n";
+    }
+    else if(client.method == "GET" && client.path == "/video/"){
+        ifstream ifs("web/listv.rhtml");
+        if(ifs){
+            stringstream ss;
+            ss << ifs.rdbuf();
+            body = ss.str();
+        }
+        else{
+            body = "<h1>Not found(/video/)</h1>";
+        }
+        status_line = "HTTP/1.1 200 OK\r\n";
+        content_type = "Content-Type: text/html\r\n";
+    }
+    else if(client.method == "GET" && regex_match(client.path, regex("^/video/.*"))){
+        ifstream ifs("web/player.rhtml");
+        if(ifs){
+            stringstream ss;
+            ss << ifs.rdbuf();
+            body = ss.str();
+        }
+        else{
+            body = "<h1>Not found(/video/*)</h1>";
+        }
+        status_line = "HTTP/1.1 200 OK\r\n";
+        content_type = "Content-Type: text/html\r\n";
+    }
+    else if(client.method == "POST" && client.path == "/upload/file"){
+        status_line = "HTTP/1.1 200 OK\r\n";
+        content_type = "Content-Type: text/html\r\n";
+        body = "<h1>File uploaded successfully</h1>";
+    }
+    else if(client.method == "POST" && client.path == "/upload/video"){
+        status_line = "HTTP/1.1 200 OK\r\n";
+        content_type = "Content-Type: text/html\r\n";
+        body = "<h1>Video uploaded successfully</h1>";
+    }
+    else{
+        status_line = "HTTP/1.1 404 Not Found\r\n";
+        content_type = "Content-Type: text/html\r\n";
+        body = "<h1>404 Not Found</h1>";
+    }
+    // NOTE: construct HTTP response
+    response += status_line;
+    response += "Server: CN2025Server/1.0\r\n";
+    response += content_type;
+    if (client.keep_alive) {
+        response += "Connection: keep-alive\r\n";
+    } else {
+        response += "Connection: Close\r\n";
+    }
+    response += "Content-Length: " + to_string(body.size()) + "\r\n";
+    response += "\r\n";
+    response += body;
+    client.write_buffer = response;
+    client.bytes_sent = 0;
+    client.read_buffer.clear();
 }
 
 int main(int argc, char *argv[]){
@@ -164,142 +345,56 @@ int main(int argc, char *argv[]){
                     // NOTE: received data
                     cout << "Received " << bytes_read << " bytes from fd " << fds[i].fd << ": " << string(tmp_buffer, bytes_read) << endl;
                     clients[i].read_buffer.append(string(tmp_buffer, bytes_read));
-                    int header_end_pos = clients[i].read_buffer.find("\r\n\r\n");
-                    if(header_end_pos != string::npos){
-                        // NOTE: The entire request has been received
-                        cout << "Complete HTTP request received from fd " << fds[i].fd << endl;
-                        cout << "Request: -----\n" << clients[i].read_buffer << "\n-----" << endl;
-                        // NOTE: parseing HTTP request
-                        string request_str = clients[i].read_buffer.substr(0, header_end_pos);
-                        // NOTE: parse first line
-                        string method, path, version;
-                        size_t method_end = request_str.find(' ');
-                        if(method_end != string::npos){
-                            method = request_str.substr(0, method_end);
-                            size_t path_end = request_str.find(' ', method_end + 1);
-                            if(path_end != string::npos){
-                                path = request_str.substr(method_end + 1, path_end - method_end - 1);
-                                version = request_str.substr(path_end + 1);
-                            }
-                        }
-                        // NOTE: parse Keep-alive header
-                        clients[i].keep_alive = true;
-                        size_t keep_live_pos = request_str.find("Connection:");
-                        if(keep_live_pos != string::npos){
-                            size_t line_end = request_str.find("\r\n", keep_live_pos);
-                            string connection_line = request_str.substr(keep_live_pos, line_end - keep_live_pos);
-                            if(connection_line.find("close") != string::npos || connection_line.find("Close") != string::npos){
-                                clients[i].keep_alive = false;
-                            }
-                        }
-                        // NOTE: routing path
-                        string status_line;
-                        string content_type;
-                        string body;
-                        string response;
-                        if(method == "GET" && path == "/"){
-                            ifstream ifs("web/index.html");
-                            if(ifs){
-                                stringstream ss;
-                                ss << ifs.rdbuf();
-                                body = ss.str();
+                }
+                // NOTE: deal with each client's request state
+                bool keep_processing = true;
+                while(keep_processing){
+                    keep_processing = false;
+                    if(clients[i].req_state == ClientReqState::READING_HEADER){
+                        size_t header_end_pos = clients[i].read_buffer.find("\r\n\r\n");
+                        if(header_end_pos != string::npos){
+                            // NOTE: complete header received
+                            string header_strs = clients[i].read_buffer.substr(0, header_end_pos);
+                            parse_header(clients[i], header_strs);
+                            cout << "Parsed HTTP header from fd " << fds[i].fd << endl;
+                            clients[i].read_buffer.erase(0, header_end_pos + 4); // remove header from request
+                            // NOTE: check if need to read body
+                            if(clients[i].content_length > 0){
+                                clients[i].req_state = ClientReqState::READING_BODY;
+                                keep_processing = true;
                             }
                             else{
-                                body = "<h1>Index file not found</h1>";
+                                clients[i].req_state = ClientReqState::READING_COMPLETE;
                             }
-                            status_line = "HTTP/1.1 200 OK\r\n";
-                            content_type = "Content-Type: text/html\r\n";
                         }
-                        else if(method == "GET" && path == "/upload/file"){
-                            ifstream ifs("web/uploadf.html");
-                            if(ifs){
-                                stringstream ss;
-                                ss << ifs.rdbuf();
-                                body = ss.str();
-                            }
-                            else{
-                                body = "<h1>Upload file not found</h1>";
-                            }
-                            status_line = "HTTP/1.1 200 OK\r\n";
-                            content_type = "Content-Type: text/html\r\n";
-                        }
-                        else if(method == "GET" && path == "/upload/video"){
-                            ifstream ifs("web/uploadv.html");
-                            if(ifs){
-                                stringstream ss;
-                                ss << ifs.rdbuf();
-                                body = ss.str();
-                            }
-                            else{
-                                body = "<h1>Upload video file not found</h1>";
-                            }
-                            status_line = "HTTP/1.1 200 OK\r\n";
-                            content_type = "Content-Type: text/html\r\n";
-                        }
-                        else if(method == "GET" && path == "/file/"){
-                            ifstream ifs("web/listf.rhtml");
-                            if(ifs){
-                                stringstream ss;
-                                ss << ifs.rdbuf();
-                                body = ss.str();
-                            }
-                            else{
-                                body = "<h1>Not found(/file/)</h1>";
-                            }
-                            status_line = "HTTP/1.1 200 OK\r\n";
-                            content_type = "Content-Type: text/html\r\n";
-                        }
-                        else if(method == "GET" && path == "/video/"){
-                            ifstream ifs("web/listv.rhtml");
-                            if(ifs){
-                                stringstream ss;
-                                ss << ifs.rdbuf();
-                                body = ss.str();
-                            }
-                            else{
-                                body = "<h1>Not found(/video/)</h1>";
-                            }
-                            status_line = "HTTP/1.1 200 OK\r\n";
-                            content_type = "Content-Type: text/html\r\n";
-                        }
-                        else if(method == "GET" && regex_match(path, regex("^/video/.*"))){
-                            ifstream ifs("web/player.rhtml");
-                            if(ifs){
-                                stringstream ss;
-                                ss << ifs.rdbuf();
-                                body = ss.str();
-                            }
-                            else{
-                                body = "<h1>Not found(/video/*)</h1>";
-                            }
-                            status_line = "HTTP/1.1 200 OK\r\n";
-                            content_type = "Content-Type: text/html\r\n";
-                        }
-                        else{
-                            status_line = "HTTP/1.1 404 Not Found\r\n";
-                            content_type = "Content-Type: text/html\r\n";
-                            body = "<h1>404 Not Found</h1>";
-                        }
-                        // NOTE: construct HTTP response
-                        response += status_line;
-                        response += "Server: CN2025Server/1.0\r\n";
-                        response += content_type;
-                        if (clients[i].keep_alive) {
-                            response += "Connection: keep-alive\r\n";
-                        } else {
-                            response += "Connection: Close\r\n";
-                        }
-                        response += "Content-Length: " + to_string(body.size()) + "\r\n";
-                        response += "\r\n";
-                        response += body;
-                        clients[i].write_buffer = response;
-                        clients[i].bytes_sent = 0;
-                        clients[i].read_buffer.clear();
-                        fds[i].events = POLLOUT | POLLIN;
                     }
-                    else{
-                        // NOTE: incomplete request, continue reading
-                        cout << "Incomplete HTTP request from fd " << fds[i].fd << ", waiting for more data." << endl;
+                    else if(clients[i].req_state == ClientReqState::READING_BODY){
+                        if(clients[i].read_buffer.size() >= clients[i].content_length){
+                            // NOTE: body received completely
+                            clients[i].req_state = ClientReqState::READING_COMPLETE;
+                            keep_processing = true;
+                        }
+                    }
+                    else if(clients[i].req_state == ClientReqState::READING_COMPLETE){
+                        // NOTE: process complete HTTP request
+                        string body;
+                        if(clients[i].content_length > 0){
+                            body = clients[i].read_buffer.substr(0, clients[i].content_length);
+                            clients[i].read_buffer.erase(0, clients[i].content_length);
+                        }
+                        process_http_request(clients[i]);
+                        cout << "Processed HTTP request from fd " << fds[i].fd <<  "method: " << clients[i].method << " path: " << clients[i].path << endl;
+                       if(clients[i].write_buffer.size() > 0){
+                            // NOTE: data to send
+                            fds[i].events = POLLOUT;
+                       }
+                       clients[i].req_state = ClientReqState::READING_HEADER;
+                       clients[i].content_length = 0;
+                       if(clients[i].read_buffer.size() > 0){
+                            // NOTE: process next request in buffer
+                            keep_processing = true;
+                       }
+
                     }
                 }
             }
@@ -309,6 +404,13 @@ int main(int argc, char *argv[]){
                     // NOTE: send remaining data
                     ssize_t bytes_to_send = clients[i].write_buffer.size() - clients[i].bytes_sent;
                     ssize_t bytes_sent = write(fds[i].fd, clients[i].write_buffer.c_str() + clients[i].bytes_sent, bytes_to_send);
+                    if(bytes_sent < 0){
+                        cerr << "Write error on fd " << fds[i].fd << ": " << strerror(errno) << endl;
+                        close(fds[i].fd);
+                        fds[i].fd = -1;
+                        clear_client(clients[i]);
+                        continue;
+                    }
                     cout << "Sent " << bytes_sent << " bytes to fd " << fds[i].fd << endl;
                     // NOTE: check if send all data
                     if(bytes_sent == bytes_to_send){
@@ -316,11 +418,12 @@ int main(int argc, char *argv[]){
                         clients[i].write_buffer.clear();
                         clients[i].bytes_sent = 0;
                         if(clients[i].keep_alive){
-                            fds[i].events = POLL_IN;
+                            fds[i].events = POLLIN;
                         }
                         else{
                             cout << "Closing connection to fd " << fds[i].fd << " as per Connection: close header." << endl;
                             close(fds[i].fd);
+                            fds[i].fd = -1;
                             clear_client(clients[i]);
                         }
                     }
@@ -341,7 +444,7 @@ int main(int argc, char *argv[]){
     for(int i=0;i<MAX_CLIENTS;i++){
         if(fds[i].fd != -1){
             close(fds[i].fd);
-            fds[i].fd = -1;
+            clear_client(clients[i]);
         }
     }
     return 0;
