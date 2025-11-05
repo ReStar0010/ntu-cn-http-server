@@ -139,7 +139,7 @@ string create_401_response(){
     response += body;
     return response;
 }
-void process_http_request(ClientState &client){
+void process_http_request(ClientState &client, string request_body){
     // NOTE: routing path
     string status_line;
     string content_type;
@@ -250,9 +250,64 @@ void process_http_request(ClientState &client){
             return;
         }
         cout << "Authorized upload request " << "for fd " << client.fd << endl;
-        status_line = "HTTP/1.1 200 OK\r\n";
-        content_type = "Content-Type: text/html\r\n";
-        body = "<h1>File uploaded successfully</h1>";
+        // NOTE: parse upload file
+        string boundary;
+        string content_type_header = client.headers["content-type"];
+        size_t boundary_pos = content_type_header.find("boundary=");
+        if(content_type_header.rfind("multipart/form-data") != string::npos && boundary_pos != string::npos){
+            boundary = content_type_header.substr(boundary_pos + 9); 
+            // NOTE: extract file content between boundaries
+            size_t filename_pos = request_body.find("filename=\"");
+            size_t filename_end_pos = 0;
+            if(filename_pos == string::npos){
+                status_line = "HTTP/1.1 400 Bad Request\r\n";
+                body = "<h1>No filename in multipart/form-data</h1>";
+            }
+            else{
+                // NOTE: extract filename
+                filename_pos += 10; // move past 'filename="'
+                filename_end_pos = request_body.find("\"", filename_pos);
+                string filename = request_body.substr(filename_pos, filename_end_pos - filename_pos);
+                size_t last_slash = filename.find_last_of("/\\");
+                if (last_slash != string::npos) {
+                    filename = filename.substr(last_slash + 1);
+                }
+                // NOTE: extract file data
+                size_t data_start_pos = request_body.find("\r\n\r\n", filename_end_pos) + 4; // move past "\r\n\r\n"
+                if(data_start_pos != string::npos){
+                    size_t data_end_pos = request_body.find(boundary, data_start_pos);
+                    if(data_end_pos != string::npos){
+                        string file_content = request_body.substr(data_start_pos, data_end_pos - data_start_pos - 2);
+                        string save_path = "web/files/" + filename;
+                        // NOTE: write file data
+                        ofstream ofs(save_path, ios::binary);
+                        if(ofs){
+                            ofs.write(file_content.c_str(), file_content.size());
+                            ofs.close();
+                            status_line = "HTTP/1.1 200 OK\r\n";
+                            content_type = "Content-Type: text/html\r\n";
+                            body = "<h1>File uploaded successfully</h1>";
+                        }
+                        else{
+                            status_line = "HTTP/1.1 500 Internal Server Error\r\n";
+                            body = "<h1>Failed to save uploaded file</h1>";
+                        }                
+                    }
+                    else{                        
+                        status_line = "HTTP/1.1 4004 Bad Request\r\n";
+                        body = "<h1>Invalid multipart/form-data format</h1>";
+                    }
+                }
+                else{
+                    status_line = "HTTP/1.1 4004 Bad Request\r\n";
+                    body = "<h1>Invalid multipart/form-data format</h1>";
+                }
+            }
+        }
+        else{
+            status_line = "HTTP/1.1 400 Bad Request\r\n";
+            body = "<h1>multipart/form-data or not boundary</h1>";
+        }
     }
     else if(client.method == "POST" && client.path == "/api/video"){
         status_line = "HTTP/1.1 200 OK\r\n";
@@ -413,7 +468,7 @@ int main(int argc, char *argv[]){
                 else{
                     // NOTE: received data
                     cout << "Received " << bytes_read << " bytes from fd " << fds[i].fd << ": " << string(tmp_buffer, bytes_read) << endl;
-                    cout << "-----------------------------" << endl;
+                    cout << "-------------END----------------" << endl;
                     clients[i].read_buffer.append(string(tmp_buffer, bytes_read));
                 }
                 // NOTE: deal with each client's request state
@@ -448,12 +503,12 @@ int main(int argc, char *argv[]){
                     }
                     else if(clients[i].req_state == ClientReqState::READING_COMPLETE){
                         // NOTE: process complete HTTP request
-                        string body;
+                        string request_body;
                         if(clients[i].content_length > 0){
-                            body = clients[i].read_buffer.substr(0, clients[i].content_length);
+                            request_body = clients[i].read_buffer.substr(0, clients[i].content_length);
                             clients[i].read_buffer.erase(0, clients[i].content_length);
                         }
-                        process_http_request(clients[i]);
+                        process_http_request(clients[i], request_body);
                         cout << "Processed HTTP request from fd " << fds[i].fd << endl <<  "method: " << clients[i].method << " path: " << clients[i].path << endl;
                        if(clients[i].write_buffer.size() > 0){
                             // NOTE: data to send
