@@ -187,12 +187,12 @@ void process_http_request(ClientState &client){
         status_line = "HTTP/1.1 200 OK\r\n";
         content_type = "Content-Type: text/html\r\n";
     }
-    else if(client.method == "POST" && client.path == "/upload/file"){
+    else if(client.method == "POST" && client.path == "/api/file"){
         status_line = "HTTP/1.1 200 OK\r\n";
         content_type = "Content-Type: text/html\r\n";
         body = "<h1>File uploaded successfully</h1>";
     }
-    else if(client.method == "POST" && client.path == "/upload/video"){
+    else if(client.method == "POST" && client.path == "/api/video"){
         status_line = "HTTP/1.1 200 OK\r\n";
         content_type = "Content-Type: text/html\r\n";
         body = "<h1>Video uploaded successfully</h1>";
@@ -365,6 +365,7 @@ int main(int argc, char *argv[]){
                             }
                             else{
                                 clients[i].req_state = ClientReqState::READING_COMPLETE;
+                                keep_processing = true;
                             }
                         }
                     }
@@ -412,8 +413,9 @@ int main(int argc, char *argv[]){
                         continue;
                     }
                     cout << "Sent " << bytes_sent << " bytes to fd " << fds[i].fd << endl;
+                    clients[i].bytes_sent += bytes_sent;
                     // NOTE: check if send all data
-                    if(bytes_sent == bytes_to_send){
+                    if(bytes_sent >= bytes_to_send){
                         cout << "All data sent to fd " << fds[i].fd << endl;
                         clients[i].write_buffer.clear();
                         clients[i].bytes_sent = 0;
