@@ -14,6 +14,7 @@
 #include <map>
 #include <csignal>      
 #include <cerrno>       
+#include "utils/base64.h"
 
 #define MAX_CLIENTS 101
 using namespace std;
@@ -59,6 +60,26 @@ void clear_client(ClientState &client){
     client.path.clear();
     client.headers.clear();
 }
+map<string, string> g_secret;
+bool load_secret(const string &filename){
+    ifstream ifs(filename);
+    if(!ifs){
+        cerr << "Failed to open secret file: " << filename << endl;
+        return false;
+    }
+    string line;
+    while(getline(ifs, line)){
+        size_t colone_pos = line.find(":");
+        if(colone_pos != string::npos){
+            string username = line.substr(0, colone_pos);
+            string password = line.substr(colone_pos + 1);
+            g_secret[username] = password;
+            cout << "Load Secret: " << username << ":" << password << endl;
+        }
+    }
+    cout << "Load " << g_secret.size() << " Secrets Completed" << endl;
+    return true;
+}
 void parse_header(ClientState &client, const string &header_strs){
     client.headers.clear();
     client.keep_alive = true; // default
@@ -102,6 +123,21 @@ void parse_header(ClientState &client, const string &header_strs){
             cout << "Invalid Content-Length header value." << endl;
         }
     }
+}
+string create_401_response(){
+    string body = "Unauthorized\n";
+    string response;
+    response += "HTTP/1.1 401 Unauthorized\r\n";
+    response += "Server: CN2025Server/1.0\r\n";
+    // 規格要求：必須包含 WWW-Authenticate 標頭
+    // 請將 "B10902999" 替換成你自己的學號 
+    response += "WWW-Authenticate: Basic realm=\"B12902078\"\r\n"; 
+    response += "Content-Type: text/plain\r\n";
+    response += "Content-Length: " + to_string(body.length()) + "\r\n";
+    response += "Connection: Close\r\n"; // 認證失敗時，通常會關閉連線
+    response += "\r\n";
+    response += body;
+    return response;
 }
 void process_http_request(ClientState &client){
     // NOTE: routing path
@@ -188,6 +224,32 @@ void process_http_request(ClientState &client){
         content_type = "Content-Type: text/html\r\n";
     }
     else if(client.method == "POST" && client.path == "/api/file"){
+        // NOTE: check authorization first
+        bool is_auth = false;
+        if(client.headers.find("authorization") != client.headers.end()){
+            string auth_header = client.headers["authorization"];
+            string prefix = "Basic ";
+            if(auth_header.substr(0, prefix.size()) == prefix){
+                string credentials_base64 = auth_header.substr(prefix.size());
+                string credentials = base64_decode(credentials_base64);
+                size_t colon_pos = credentials.find(":");
+                if(colon_pos != string::npos){
+                    string username = credentials.substr(0, colon_pos);
+                    string password = credentials.substr(colon_pos + 1);
+                    if(g_secret.find(username) != g_secret.end() && g_secret[username] == password){
+                        is_auth = true;
+                    }
+                }
+            }
+        }
+        if(!is_auth){
+            // NOTE: not authorized
+            client.write_buffer = create_401_response();
+            client.bytes_sent = 0;
+            client.keep_alive = false; 
+            return;
+        }
+        cout << "Authorized upload request " << "for fd " << client.fd << endl;
         status_line = "HTTP/1.1 200 OK\r\n";
         content_type = "Content-Type: text/html\r\n";
         body = "<h1>File uploaded successfully</h1>";
@@ -218,6 +280,7 @@ void process_http_request(ClientState &client){
     client.bytes_sent = 0;
     client.read_buffer.clear();
 }
+
 
 int main(int argc, char *argv[]){
     // NOTE: filter arguments
@@ -255,6 +318,12 @@ int main(int argc, char *argv[]){
     // NOTE: bind address
     if(bind(server_fd, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0){
         cerr << "Bind address failed: " << strerror(errno) << endl;
+        close(server_fd);
+        return 1;
+    }
+    // NOTE: check authtication
+    if(load_secret("secret") == false){
+        cerr << "Load secret file failed." << endl;
         close(server_fd);
         return 1;
     }
@@ -344,6 +413,7 @@ int main(int argc, char *argv[]){
                 else{
                     // NOTE: received data
                     cout << "Received " << bytes_read << " bytes from fd " << fds[i].fd << ": " << string(tmp_buffer, bytes_read) << endl;
+                    cout << "-----------------------------" << endl;
                     clients[i].read_buffer.append(string(tmp_buffer, bytes_read));
                 }
                 // NOTE: deal with each client's request state
@@ -384,7 +454,7 @@ int main(int argc, char *argv[]){
                             clients[i].read_buffer.erase(0, clients[i].content_length);
                         }
                         process_http_request(clients[i]);
-                        cout << "Processed HTTP request from fd " << fds[i].fd <<  "method: " << clients[i].method << " path: " << clients[i].path << endl;
+                        cout << "Processed HTTP request from fd " << fds[i].fd << endl <<  "method: " << clients[i].method << " path: " << clients[i].path << endl;
                        if(clients[i].write_buffer.size() > 0){
                             // NOTE: data to send
                             fds[i].events = POLLOUT;
