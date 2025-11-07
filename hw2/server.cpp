@@ -20,6 +20,8 @@
 #include "utils/base64.h"
 
 
+// *FIXME  Remember to turn off output
+
 #define MAX_CLIENTS 101
 using namespace std;
 enum class ClientReqState{
@@ -181,6 +183,63 @@ void start_stash_conversation(const string &tmp_video_path, const string &video_
 
     cout << "Stash process forked with PID " << pid << " for video: " << video_name << endl;
 }
+string get_MIME_type(const string &filename){
+    size_t dot_pos = filename.find_last_of(".");
+    if(dot_pos == string::npos){
+        return "text/plain";
+    }
+    string extension = filename.substr(dot_pos + 1);
+    // normalize to lower-case
+    for (char &c : extension) c = tolower(c);
+
+    if (extension == "html" || extension == "rhtml") {
+        return "text/html";
+    } else if (extension == "css") {
+        return "text/css";
+    } else if (extension == "js") {
+        return "application/javascript";
+    } else if (extension == "png") {
+        return "image/png";
+    } else if (extension == "jpg" || extension == "jpeg") {
+        return "image/jpeg";
+    } else if (extension == "gif") {
+        return "image/gif";
+    } else if (extension == "mpd") {
+        return "application/dash+xml";
+    } else if (extension == "mp4") {
+        return "video/mp4";
+    }
+    return "application/octet-stream";
+}
+bool authenticate_user(ClientState &client){
+    bool is_auth = false;
+    if(client.headers.find("authorization") != client.headers.end()){
+        string auth_header = client.headers["authorization"];
+        string prefix = "Basic ";
+        if(auth_header.substr(0, prefix.size()) == prefix){
+            string credentials_base64 = auth_header.substr(prefix.size());
+            string credentials = base64_decode(credentials_base64);
+            size_t colon_pos = credentials.find(":");
+            if(colon_pos != string::npos){
+                string username = credentials.substr(0, colon_pos);
+                string password = credentials.substr(colon_pos + 1);
+                if(g_secret.find(username) != g_secret.end() && g_secret[username] == password){
+                    is_auth = true;
+                }
+            }
+        }
+    }
+    if(!is_auth){
+        // NOTE: not authorized
+        client.write_buffer = create_401_response();
+        client.bytes_sent = 0;
+        client.keep_alive = false; 
+        cout << "Unauthorized " << client.method << " " << client.path << " for fd " << client.fd << endl;        
+        return false;
+    }
+    cout << "Authorized " << client.method << " " << client.path << " for fd " << client.fd << endl;
+    return true;
+}
 void process_http_request(ClientState &client, string request_body){
     // NOTE: routing path
     string status_line;
@@ -265,6 +324,55 @@ void process_http_request(ClientState &client, string request_body){
         status_line = "HTTP/1.1 200 OK\r\n";
         content_type = "Content-Type: text/html\r\n";
     }
+    else if(client.method == "GET" && client.path.rfind("/api/file/", 0) == 0){
+        // NOTE: get safe filename
+        if(authenticate_user(client) == false){
+            status_line = "HTTP/1.1 403 Forbidden\r\n";
+            body = "<h1>Forbidden</h1>";
+        }
+        else{
+            //TODO -  URL decode filename
+            string filename = client.path.substr(10); // length of "/api/file/" is 10
+            string file_path = "web/files/" + filename;
+            ifstream ifs(file_path, ios::binary);
+            if(ifs){
+                stringstream ss;
+                ss << ifs.rdbuf();
+                body = ss.str();
+                status_line = "HTTP/1.1 200 OK\r\n";
+                content_type = "Content-Type: " + get_MIME_type(filename) + "\r\n";
+            }
+            else{
+                status_line = "HTTP/1.1 404 Not Found\r\n";
+                body = "<h1>File not found</h1>";
+            }
+        }
+    }
+    else if(client.method == "GET" && client.path.rfind("/api/video/", 0) == 0){
+        // NOTE: get safe video name
+        if(authenticate_user(client) == false){
+            status_line = "HTTP/1.1 403 Forbidden\r\n";
+            body = "<h1>Forbidden</h1>";
+        }
+        else{
+            string filename = client.path.substr(11); // length of "/api/file/" is 10
+            //TODO -  URL decode filename
+            string file_path = "web/videos/" + filename;
+            cout << "filepath: " << file_path << endl;
+            ifstream ifs(file_path, ios::binary);
+            if(ifs){
+                stringstream ss;
+                ss << ifs.rdbuf();
+                body = ss.str();
+                status_line = "HTTP/1.1 200 OK\r\n";
+                content_type = "Content-Type: " + get_MIME_type(filename) + "\r\n";
+            }
+            else{
+                status_line = "HTTP/1.1 404 Not Found\r\n";
+                body = "<h1>File not found</h1>";
+            }
+        }
+    }
     else if(client.method == "POST" && client.path == "/api/file"){
         // NOTE: check authorization first
         bool is_auth = false;
@@ -328,7 +436,6 @@ void process_http_request(ClientState &client, string request_body){
                             ofs.write(file_content.c_str(), file_content.size());
                             ofs.close();
                             status_line = "HTTP/1.1 200 OK\r\n";
-                            content_type = "Content-Type: text/html\r\n";
                             body = "<h1>File uploaded successfully</h1>";
                         }
                         else{
