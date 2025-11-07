@@ -3,18 +3,22 @@
 #include <fstream>
 #include <sstream>
 #include <string>
-#include <vector>
 #include <regex>
 #include <cstring>      
 #include <unistd.h>     
+#include <fcntl.h>
+#include <sys/wait.h>
+#include <sys/stat.h>
 #include <sys/socket.h> 
 #include <netinet/in.h> 
 #include <arpa/inet.h>  
 #include <poll.h>       
+#include <signal.h>
 #include <map>
-#include <csignal>      
 #include <cerrno>       
+#include <chrono>
 #include "utils/base64.h"
+
 
 #define MAX_CLIENTS 101
 using namespace std;
@@ -139,6 +143,44 @@ string create_401_response(){
     response += body;
     return response;
 }
+void start_stash_conversation(const string &tmp_video_path, const string &video_name){
+    cout << "Starting stash conversation for video: " << video_name << endl;
+    cout << "Forking process to stash video" << endl;
+    pid_t pid = fork();
+    if(pid < 0){
+        cerr << "Fork failed for stashing video: " << strerror(errno) << endl;
+        return;
+    }
+    else if(pid == 0){
+        // NOTE: mute the child process output
+        int fd_null = open("/dev/null", O_WRONLY);
+        dup2(fd_null, STDOUT_FILENO);
+        dup2(fd_null, STDERR_FILENO);
+        close(fd_null);
+        // NOTE: child process, do stashing 
+        string output_dir = "web/videos/" + video_name; // could be path traversal
+        mkdir(output_dir.c_str(), 0755);
+        string mpd_output_path = output_dir + "/dash.mpd";
+        const char *args[] = {
+            "ffmpeg",
+            "-re", "-i", tmp_video_path.c_str(),
+            "-c:a", "aac", "-c:v", "libx264",
+            "-map", "0", "-b:v:1", "6M", "-s:v:1", "1920x1080", "-profile:v:1", "high",
+            "-map", "0", "-b:v:0", "144k", "-s:v:0", "256x144", "-profile:v:0", "baseline",
+            "-bf", "1", "-keyint_min", "120", "-g", "120", "-sc_threshold", "0", "-b_strategy", "0",
+            "-ar:a:1", "22050", "-use_timeline", "1", "-use_template", "1",
+            "-adaptation_sets", "id=0,streams=v id=1,streams=a",
+            "-f", "dash",
+            mpd_output_path.c_str(),
+            NULL //
+        };
+        execvp("ffmpeg", (char* const*)args);
+        cerr << "Exec ffmpeg failed for stashing video: " << strerror(errno) << endl;
+        exit(1);
+    }
+
+    cout << "Stash process forked with PID " << pid << " for video: " << video_name << endl;
+}
 void process_http_request(ClientState &client, string request_body){
     // NOTE: routing path
     string status_line;
@@ -247,6 +289,7 @@ void process_http_request(ClientState &client, string request_body){
             client.write_buffer = create_401_response();
             client.bytes_sent = 0;
             client.keep_alive = false; 
+            cerr << "Unauthorized upload request " << "for fd " << client.fd << endl;
             return;
         }
         cout << "Authorized upload request " << "for fd " << client.fd << endl;
@@ -294,12 +337,12 @@ void process_http_request(ClientState &client, string request_body){
                         }                
                     }
                     else{                        
-                        status_line = "HTTP/1.1 4004 Bad Request\r\n";
+                        status_line = "HTTP/1.1 400 Bad Request\r\n";
                         body = "<h1>Invalid multipart/form-data format</h1>";
                     }
                 }
                 else{
-                    status_line = "HTTP/1.1 4004 Bad Request\r\n";
+                    status_line = "HTTP/1.1 400 Bad Request\r\n";
                     body = "<h1>Invalid multipart/form-data format</h1>";
                 }
             }
@@ -308,11 +351,101 @@ void process_http_request(ClientState &client, string request_body){
             status_line = "HTTP/1.1 400 Bad Request\r\n";
             body = "<h1>multipart/form-data or not boundary</h1>";
         }
+        content_type = "Content-Type: text/html\r\n"; // Add this line before response construction
     }
     else if(client.method == "POST" && client.path == "/api/video"){
-        status_line = "HTTP/1.1 200 OK\r\n";
-        content_type = "Content-Type: text/html\r\n";
-        body = "<h1>Video uploaded successfully</h1>";
+        // NOTE: check authorization first
+        bool is_auth = false;
+        if(client.headers.find("authorization") != client.headers.end()){
+            string auth_header = client.headers["authorization"];
+            string prefix = "Basic ";
+            if(auth_header.substr(0, prefix.size()) == prefix){
+                string credentials_base64 = auth_header.substr(prefix.size());
+                string credentials = base64_decode(credentials_base64);
+                size_t colon_pos = credentials.find(":");
+                if(colon_pos != string::npos){
+                    string username = credentials.substr(0, colon_pos);
+                    string password = credentials.substr(colon_pos + 1);
+                    if(g_secret.find(username) != g_secret.end() && g_secret[username] == password){
+                        is_auth = true;
+                    }
+                }
+            }
+        }
+        if(!is_auth){
+            // NOTE: not authorized
+            client.write_buffer = create_401_response();
+            client.bytes_sent = 0;
+            client.keep_alive = false; 
+            cerr << "Unauthorized upload request " << "for fd " << client.fd << endl;
+            return;
+        }
+        cout << "Authorized video upload request " << "for fd " << client.fd << endl;
+        // NOTE: parse upload video
+        string boundary;
+        string content_type_header = client.headers["content-type"];
+        size_t boundary_pos = content_type_header.find("boundary=");
+        if(content_type_header.rfind("multipart/form-data") != string::npos && boundary_pos != string::npos){
+            boundary = content_type_header.substr(boundary_pos + 9);
+            size_t filename_start_pos = request_body.find("filename=\"");
+            if(filename_start_pos == string::npos){
+                status_line = "HTTP/1.1 400 Bad Request\r\n";
+                body = "<h1>No filename in multipart/form-data</h1>";
+            } 
+            else{
+                filename_start_pos += 10; // move past filename
+                size_t filename_end_pos = request_body.find("\"", filename_start_pos);
+                string raw_filename = request_body.substr(filename_start_pos, filename_end_pos - filename_start_pos); // FIX for path traversal
+                string filename = raw_filename;
+                size_t last_slash = filename.find_last_of("/\\");
+                if (last_slash != string::npos) {
+                    filename = filename.substr(last_slash + 1);
+                }
+                // NOTE: parse file name and extension
+                string video_name, extension;
+                size_t extension_pos = filename.find_last_of(".");
+                if(extension_pos != string::npos){
+                    video_name = filename.substr(0, extension_pos);
+                    extension = filename.substr(extension_pos);
+                }
+                else{
+                   extension = ""; 
+                }
+                // NOTE: create unique tmp file path
+                auto now = chrono::high_resolution_clock::now();
+                long long timestamp = chrono::duration_cast<chrono::nanoseconds>(now.time_since_epoch()).count();
+                string unique_id = "_" + to_string(getpid()) + "_" + to_string(timestamp);
+                string tmp_save_path = "web/tmp/" + video_name + unique_id + extension;
+
+                size_t data_start_pos = request_body.find("\r\n\r\n", filename_end_pos) + 4; // move past "\r\n\r\n"
+                size_t data_end_pos = request_body.find(boundary, data_start_pos);
+                string file_data = request_body.substr(data_start_pos, data_end_pos - data_start_pos - 2); // move back before \r\n
+                ofstream ofs(tmp_save_path, ios::binary);
+                if(ofs){
+                    ofs.write(file_data.c_str(), file_data.size());
+                    ofs.close();
+                    string video_name = filename;
+                    size_t dot_pos = video_name.find_last_of(".");
+                    if(dot_pos != string::npos){
+                        video_name = video_name.substr(0, dot_pos);
+                    }
+                    start_stash_conversation(tmp_save_path, video_name);
+                    status_line = "HTTP/1.1 200 OK\r\n";
+                    body = "<h1>Video Uploaded</h1>";
+                }
+                else{
+                    status_line = "HTTP/1.1 500 Internal Server Error\r\n";
+                    body = "<h1>Failed to save uploaded video file</h1>";
+                }
+                content_type = "Content-Type: text/html\r\n";
+            }
+        }
+        else{
+            // Add missing error response
+            status_line = "HTTP/1.1 400 Bad Request\r\n";
+            body = "<h1>Invalid multipart/form-data or missing boundary</h1>";
+        }
+        content_type = "Content-Type: text/html\r\n"; // Add this line before response construction
     }
     else{
         status_line = "HTTP/1.1 404 Not Found\r\n";
@@ -335,7 +468,10 @@ void process_http_request(ClientState &client, string request_body){
     client.bytes_sent = 0;
     client.read_buffer.clear();
 }
-
+void sigchld_handler(int sig) {
+    // Reap all dead child processes
+    while (waitpid(-1, NULL, WNOHANG) > 0);
+}
 
 int main(int argc, char *argv[]){
     // NOTE: filter arguments
@@ -347,6 +483,15 @@ int main(int argc, char *argv[]){
     int port = stoi(argv[1]);
     if(port < 1025 || port > 65535){
         cerr << "Port number out of range" << endl;
+        return 1;
+    }
+    // NOTE: prevent zombie processes
+    struct sigaction sa;
+    sa.sa_handler = sigchld_handler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = SA_RESTART | SA_NOCLDSTOP;
+    if (sigaction(SIGCHLD, &sa, NULL) == -1) {
+        cerr << "Failed to set SIGCHLD handler: " << strerror(errno) << endl;
         return 1;
     }
     // NOTE: create server socket (blocking mode by default)
@@ -403,6 +548,9 @@ int main(int argc, char *argv[]){
         // NOTE: poll() blocks until event occurs on any socket
         int events_number = poll(fds, MAX_CLIENTS, -1);
         if(events_number == -1){
+            if(errno == EINTR){
+                continue;
+            }
             cerr << "Poll error: " << strerror(errno) << endl;
             break;
         }
@@ -556,7 +704,6 @@ int main(int argc, char *argv[]){
                     }
                     else{
                         cout << "Remaining " << clients[i].write_buffer.size() - clients[i].bytes_sent << " bytes to send to fd " << fds[i].fd << endl;   
-                        clients[i].bytes_sent += bytes_sent;
                     }
                 }
                 else{
@@ -572,6 +719,7 @@ int main(int argc, char *argv[]){
         if(fds[i].fd != -1){
             close(fds[i].fd);
             clear_client(clients[i]);
+            system("rm -rf web/tmp/*");
         }
     }
     return 0;
