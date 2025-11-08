@@ -295,16 +295,16 @@ void process_http_request(ClientState &client, string request_body){
             if(content_type_header.rfind("multipart/form-data") != string::npos && boundary_pos != string::npos){
                 resource_exists = true;
                 boundary = content_type_header.substr(boundary_pos + 9);
+                size_t semicolon_pos = boundary.find(';');
+                if(semicolon_pos != string::npos){
+                    boundary = boundary.substr(0, semicolon_pos);
+                }
                 // NOTE: remove quotes and trailing semicolon/whitespace from boundary
                 if(!boundary.empty() && boundary.front() == '"'){
                     boundary = boundary.substr(1);
                     if(!boundary.empty() && boundary.back() == '"'){
                         boundary = boundary.substr(0, boundary.length() - 1);
                     }
-                }
-                size_t semicolon_pos = boundary.find(';');
-                if(semicolon_pos != string::npos){
-                    boundary = boundary.substr(0, semicolon_pos);
                 }
                 // NOTE: trim whitespace
                 while(!boundary.empty() && (boundary.back() == ' ' || boundary.back() == '\t' || boundary.back() == '\r' || boundary.back() == '\n')){
@@ -396,16 +396,16 @@ void process_http_request(ClientState &client, string request_body){
             if(content_type_header.rfind("multipart/form-data") != string::npos && boundary_pos != string::npos){
                 resource_exists = true;
                 boundary = content_type_header.substr(boundary_pos + 9);
+                size_t semicolon_pos = boundary.find(';');
+                if(semicolon_pos != string::npos){
+                    boundary = boundary.substr(0, semicolon_pos);
+                }
                 // NOTE: remove quotes and trailing semicolon/whitespace from boundary
                 if(!boundary.empty() && boundary.front() == '"'){
                     boundary = boundary.substr(1);
                     if(!boundary.empty() && boundary.back() == '"'){
                         boundary = boundary.substr(0, boundary.length() - 1);
                     }
-                }
-                size_t semicolon_pos = boundary.find(';');
-                if(semicolon_pos != string::npos){
-                    boundary = boundary.substr(0, semicolon_pos);
                 }
                 // NOTE: trim whitespace
                 while(!boundary.empty() && (boundary.back() == ' ' || boundary.back() == '\t' || boundary.back() == '\r' || boundary.back() == '\n')){
