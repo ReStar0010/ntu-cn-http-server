@@ -1,6 +1,6 @@
 .PHONY: all clean
 
-all: server client
+all: setup server client
 setup:
 	@mkdir -p web/tmp
 	@mkdir -p web/videos
