@@ -179,8 +179,8 @@ int main(int argc, char *argv[]){
                 }
                 else{
                     // NOTE: received data
-                    cout << "Received " << bytes_read << " bytes from fd " << fds[i].fd  << endl;
-                    cout << "-------------END----------------" << endl;
+                    // cout << "Received " << bytes_read << " bytes from fd " << fds[i].fd  << endl;
+                    // cout << "-------------END----------------" << endl;
                     clients[i].read_buffer.append(string(tmp_buffer, bytes_read));
                 }
                 // NOTE: deal with each client's request state
