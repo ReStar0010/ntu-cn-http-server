@@ -24,14 +24,12 @@ void process_http_request(ClientState &client, string request_body){
     // NOTE: Define flags for the response's stage
     bool endpoint_defined = false;
     bool method_allowed = false;
-    bool auth_required = false;
     bool resource_exists = false;
     bool everything_ok = false;
     if(client.path == "/"){
         endpoint_defined = true;
         if(client.method == "GET"){
             method_allowed = true;
-            auth_required = false;
             ifstream ifs("web/index.html");
             if(ifs){
                 stringstream ss;
@@ -52,7 +50,6 @@ void process_http_request(ClientState &client, string request_body){
         endpoint_defined = true;
         if(client.method == "GET"){
             method_allowed = true;
-            auth_required = true;
             if(authenticate_user(client) == false){
                 client.write_buffer = create_401_response();
                 client.bytes_sent = 0;
@@ -77,7 +74,6 @@ void process_http_request(ClientState &client, string request_body){
         endpoint_defined = true;
         if(client.method == "GET"){
             method_allowed = true;
-            auth_required = true;
             if(authenticate_user(client) == false){
                 client.write_buffer = create_401_response();
                 client.bytes_sent = 0;
@@ -102,7 +98,6 @@ void process_http_request(ClientState &client, string request_body){
         endpoint_defined = true;
         if(client.method == "GET"){
             method_allowed = true;
-            auth_required = false;
             ifstream ifs("web/listf.rhtml");
             if(ifs.is_open()){
                 resource_exists = true;
@@ -144,7 +139,6 @@ void process_http_request(ClientState &client, string request_body){
         endpoint_defined = true;
         if(client.method == "GET"){
             method_allowed = true;
-            auth_required = false;
             string encoded_videoname = client.path.substr(7); // length of "/video/" is 7
             string videoname = url_decode(encoded_videoname);
 
@@ -174,7 +168,6 @@ void process_http_request(ClientState &client, string request_body){
         endpoint_defined = true;
         if(client.method == "GET"){
             method_allowed = true;
-            auth_required = false;
             ifstream ifs("web/listv.rhtml");
             if(ifs.is_open()){
                 resource_exists = true;
@@ -222,7 +215,6 @@ void process_http_request(ClientState &client, string request_body){
         endpoint_defined = true;
         if(client.method == "GET"){
             method_allowed = true;
-            auth_required = false;
             // NOTE: get safe filename
             string encoded_filename = client.path.substr(10); // length of "/api/file/" is 10
             string filename = url_decode(encoded_filename);
@@ -247,7 +239,6 @@ void process_http_request(ClientState &client, string request_body){
         endpoint_defined = true;
         if(client.method == "GET"){
             method_allowed = true;
-            auth_required = false;
             // NOTE: get safe video name
             string encoded_filename = client.path.substr(11); // length of "/api/video/" is 11
             string filename = url_decode(encoded_filename);
@@ -272,7 +263,6 @@ void process_http_request(ClientState &client, string request_body){
         endpoint_defined = true;
         if(client.method == "POST"){
             method_allowed = true;
-            auth_required = true;
             if(authenticate_user(client) == false){
                 client.write_buffer = create_401_response();
                 client.bytes_sent = 0;
@@ -373,7 +363,6 @@ void process_http_request(ClientState &client, string request_body){
         endpoint_defined = true;
         if(client.method == "POST"){
             method_allowed = true;
-            auth_required = true;
             if(authenticate_user(client) == false){
                 client.write_buffer = create_401_response();
                 client.bytes_sent = 0;
