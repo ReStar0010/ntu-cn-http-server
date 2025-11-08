@@ -188,6 +188,36 @@ HttpResponse recv_and_parse_http_response(int socket_fd){
     response.body = body_part;
     return response;
 }
+string read_file_binary(const string& filepath) {
+    // NOTE: read entire file into string
+    ifstream file(filepath, ios::binary | ios::ate);
+    if (!file.is_open()) {
+        return ""; // 
+    }
+
+    streamsize size = file.tellg();
+    file.seekg(0, ios::beg);
+
+    string buffer(size, '\0'); // 
+    if (file.read(&buffer[0], size)) {
+        return buffer;
+    }
+    
+    return ""; // 
+}
+string generate_boundary() {
+    // NOTE: generate a random boundary string for multipart/form-data
+    static const char alphanum[] =
+        "0123456789"
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        "abcdefghijklmnopqrstuvwxyz";
+    int len = 30; 
+    string boundary = "----WebKitFormBoundary";
+    for (int i = 0; i < len; ++i) {
+        boundary += alphanum[rand() % (sizeof(alphanum) - 1)];
+    }
+    return boundary;
+}
 
 
 int main(int argc, char *argv[]) {
@@ -224,7 +254,8 @@ int main(int argc, char *argv[]) {
         if (cmd == "quit") {
             cout << "Bye." << endl;
             break; // 
-        } else if (cmd == "get") {
+        } 
+        else if (cmd == "get") {
             string filename;
             // NOTE: send to server
             if(ss >> filename){
@@ -275,14 +306,94 @@ int main(int argc, char *argv[]) {
                     g_server_fd = -1;
                 }
             }
+            else {
+                cerr << "Usage: get [file]" << endl; // 
+            }
+        } 
+        else if (cmd == "put" || cmd == "putv") {
+            string filename;
+            string linepart;
+            // NOTE: send to server
+            if(!(ss >> filename)){
+                while(ss >> linepart){
+                    filename += linepart + " ";
+                }
 
-        } else if (cmd == "put") {
-            // TODO: Implement 'put'
-            cout << "Command 'put' not implemented yet." << endl;
-        } else if (cmd == "putv") {
-            // TODO: Implement 'putv'
-            cout << "Command 'putv' not implemented yet." << endl;
-        } else if (cmd == "auth") {
+                if(filename.empty()){
+                    if(cmd == "put"){
+                        cerr << "Usage: put [file]" << endl; 
+                    }
+                    else{
+                        cerr << "Usage: putv [file]" << endl; 
+                    }
+                    continue;
+                }
+                filename = filename.substr(1);
+            }
+            // NOTE: read file from local
+            string file_content = read_file_binary(filename);
+            if(file_content.empty()){
+                cerr << "Command failed. File not found on local." << endl; 
+                continue;
+            }
+            if(g_server_fd == -1){
+                if(!connect_to_server()){
+                    cerr << "Command failed. Cannot reconnect to server." << endl;
+                    continue;
+                }
+            }
+            // NOTE: build multipart/form-data body
+            string boundary = generate_boundary();
+            stringstream body_ss;
+            body_ss << "--" << boundary << "\r\n";
+            body_ss << "Content-Disposition: form-data; name=\"file\"; filename=\"" << filename << "\"\r\n";
+            body_ss << "Content-Type: application/octet-stream\r\n";
+            body_ss << "\r\n";
+            body_ss << file_content; 
+            body_ss << "\r\n";
+            body_ss << "--" << boundary << "--\r\n";
+            string body = body_ss.str();
+            string path;
+            if(cmd == "put"){
+                path = "/api/file";
+            }
+            else{
+                path = "/api/video";
+            }
+            // NOTE: build request
+            map<string, string> headers;
+            headers["Content-Type"] = "multipart/form-data; boundary=" + boundary;
+            string request = build_http_request("POST", path, headers, body);
+            // NOTE: send request
+            if (send(g_server_fd, request.c_str(), request.length(), 0) < 0) {
+                perror("send");
+                close(g_server_fd);
+                g_server_fd = -1;
+                cerr << "Command failed. Send error." << endl;
+                continue;
+            }
+            HttpResponse response = recv_and_parse_http_response(g_server_fd);
+            if(response.status_code == 200){
+                cout << "Command succeeded." << endl;
+            }
+            else if(response.status_code == 401){
+                cerr << "Command failed. Invalid user or wrong password." << endl;
+            }
+            else if(response.status_code == 404){
+                cerr << "Command failed. File not found on server." << endl;
+            } 
+            else if (response.status_code == -1) {
+                 cerr << "Command failed. Connection error." << endl;
+                 g_server_fd = -1; 
+            } else {
+                cerr << "Command failed. Server returned status " << response.status_code << endl;
+            }
+            if(response.connection_close){
+                close(g_server_fd);
+                g_server_fd = -1;
+            }
+        } 
+        else if (cmd == "auth") {
             string credential;
             if (ss >> credential){
                 g_auth_credential = credential;
@@ -292,7 +403,8 @@ int main(int argc, char *argv[]) {
                 cerr << "Usage: auth [username:password]" << endl;
             }
             cout << "Command 'auth' not implemented yet." << endl;
-        } else if (!cmd.empty()) {
+        } 
+        else if (!cmd.empty()) {
             cerr << "Command Not Found." << endl; // 
         }
     }
