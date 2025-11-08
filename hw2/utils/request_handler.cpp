@@ -235,7 +235,22 @@ void process_http_request(ClientState &client, string request_body){
             size_t boundary_pos = content_type_header.find("boundary=");
             if(content_type_header.rfind("multipart/form-data") != string::npos && boundary_pos != string::npos){
                 resource_exists = true;
-                boundary = content_type_header.substr(boundary_pos + 9); 
+                boundary = content_type_header.substr(boundary_pos + 9);
+                // NOTE: remove quotes and trailing semicolon/whitespace from boundary
+                if(!boundary.empty() && boundary.front() == '"'){
+                    boundary = boundary.substr(1);
+                    if(!boundary.empty() && boundary.back() == '"'){
+                        boundary = boundary.substr(0, boundary.length() - 1);
+                    }
+                }
+                size_t semicolon_pos = boundary.find(';');
+                if(semicolon_pos != string::npos){
+                    boundary = boundary.substr(0, semicolon_pos);
+                }
+                // NOTE: trim whitespace
+                while(!boundary.empty() && (boundary.back() == ' ' || boundary.back() == '\t' || boundary.back() == '\r' || boundary.back() == '\n')){
+                    boundary.pop_back();
+                }
                 // NOTE: extract file content between boundaries
                 size_t filename_pos = request_body.find("filename=\"");
                 size_t filename_end_pos = 0;
@@ -257,9 +272,10 @@ void process_http_request(ClientState &client, string request_body){
                     // NOTE: extract file data
                     size_t data_start_pos = request_body.find("\r\n\r\n", filename_end_pos) + 4; // move past "\r\n\r\n"
                     if(data_start_pos != string::npos){
-                        size_t data_end_pos = request_body.find(boundary, data_start_pos);
+                        string boundary_marker = "\r\n--" + boundary;
+                        size_t data_end_pos = request_body.find(boundary_marker, data_start_pos);
                         if(data_end_pos != string::npos){
-                            string file_content = request_body.substr(data_start_pos, data_end_pos - data_start_pos - 2);
+                            string file_content = request_body.substr(data_start_pos, data_end_pos - data_start_pos);
                             string save_path = "web/files/" + filename;
                             // NOTE: write file data
                             ofstream ofs(save_path, ios::binary);
@@ -291,7 +307,11 @@ void process_http_request(ClientState &client, string request_body){
                 }
             }
             else{
-                resource_exists = false;
+                status_line = "HTTP/1.1 400 Bad Request\r\n";
+                body = "<h1>multipart/form-data or not boundary</h1>";
+                content_type = "Content-Type: text/html\r\n";
+                resource_exists = true;
+                everything_ok = false;
             }
             // NOTE: content_type is set above for success case, or here for error cases
             if(content_type.empty()){
@@ -317,6 +337,21 @@ void process_http_request(ClientState &client, string request_body){
             if(content_type_header.rfind("multipart/form-data") != string::npos && boundary_pos != string::npos){
                 resource_exists = true;
                 boundary = content_type_header.substr(boundary_pos + 9);
+                // NOTE: remove quotes and trailing semicolon/whitespace from boundary
+                if(!boundary.empty() && boundary.front() == '"'){
+                    boundary = boundary.substr(1);
+                    if(!boundary.empty() && boundary.back() == '"'){
+                        boundary = boundary.substr(0, boundary.length() - 1);
+                    }
+                }
+                size_t semicolon_pos = boundary.find(';');
+                if(semicolon_pos != string::npos){
+                    boundary = boundary.substr(0, semicolon_pos);
+                }
+                // NOTE: trim whitespace
+                while(!boundary.empty() && (boundary.back() == ' ' || boundary.back() == '\t' || boundary.back() == '\r' || boundary.back() == '\n')){
+                    boundary.pop_back();
+                }
                 size_t filename_start_pos = request_body.find("filename=\"");
                 if(filename_start_pos == string::npos){
                     status_line = "HTTP/1.1 400 Bad Request\r\n";
@@ -350,8 +385,9 @@ void process_http_request(ClientState &client, string request_body){
                     string tmp_save_path = "web/tmp/" + video_name + unique_id + extension;
 
                     size_t data_start_pos = request_body.find("\r\n\r\n", filename_end_pos) + 4; // move past "\r\n\r\n"
-                    size_t data_end_pos = request_body.find(boundary, data_start_pos);
-                    string file_data = request_body.substr(data_start_pos, data_end_pos - data_start_pos - 2); // move back before \r\n
+                    string boundary_marker = "\r\n--" + boundary;
+                    size_t data_end_pos = request_body.find(boundary_marker, data_start_pos);
+                    string file_data = request_body.substr(data_start_pos, data_end_pos - data_start_pos);
                     ofstream ofs(tmp_save_path, ios::binary);
                     if(ofs){
                         ofs.write(file_data.c_str(), file_data.size());
@@ -373,7 +409,11 @@ void process_http_request(ClientState &client, string request_body){
                 }
             }
             else{
-                resource_exists = false;
+                status_line = "HTTP/1.1 400 Bad Request\r\n";
+                body = "<h1>Invalid multipart/form-data or missing boundary</h1>";
+                content_type = "Content-Type: text/html\r\n";
+                resource_exists = true;
+                everything_ok = false;
             }
             // NOTE: content_type is set above for success case, or here for error cases
             if(content_type.empty()){
