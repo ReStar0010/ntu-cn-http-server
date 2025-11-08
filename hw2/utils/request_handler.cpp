@@ -218,6 +218,65 @@ void process_http_request(ClientState &client, string request_body){
             }
         }
     }
+    else if(client.path.rfind("/api/file/", 0) == 0){
+        endpoint_defined = true;
+        if(client.method == "GET"){
+            method_allowed = true;
+            auth_required = true;
+            if(authenticate_user(client) == false){
+                client.write_buffer = create_401_response();
+                client.bytes_sent = 0;
+                return;
+            }
+            // NOTE: get safe filename
+            string encoded_filename = client.path.substr(10); // length of "/api/file/" is 10
+            string filename = url_decode(encoded_filename);
+            string file_path = "web/files/" + filename;
+            ifstream ifs(file_path, ios::binary);
+            if(ifs){
+                stringstream ss;
+                ss << ifs.rdbuf();
+                body = ss.str();
+                resource_exists = true;
+                everything_ok = true;
+                status_line = "HTTP/1.1 200 OK\r\n";
+                content_type = "Content-Type: " + get_MIME_type(filename) + "\r\n";
+            }
+            else{
+                resource_exists = false;
+            }
+        }
+    }
+    else if(client.path.rfind("/api/video/", 0) == 0){
+        endpoint_defined = true;
+        if(client.method == "GET"){
+            method_allowed = true;
+            auth_required = true;
+            if(authenticate_user(client) == false){
+                client.write_buffer = create_401_response();
+                client.bytes_sent = 0;
+                return;
+            }
+            // NOTE: get safe video name
+            string encoded_filename = client.path.substr(11); // length of "/api/video/" is 11
+            string filename = url_decode(encoded_filename);
+            string file_path = "web/videos/" + filename;
+            cout << "filepath: " << file_path << endl;
+            ifstream ifs(file_path, ios::binary);
+            if(ifs){
+                stringstream ss;
+                ss << ifs.rdbuf();
+                body = ss.str();
+                resource_exists = true;
+                everything_ok = true;
+                status_line = "HTTP/1.1 200 OK\r\n";
+                content_type = "Content-Type: " + get_MIME_type(filename) + "\r\n";
+            }
+            else{
+                resource_exists = false;
+            }
+        }
+    }
     else if(client.path == "/api/file"){
         endpoint_defined = true;
         if(client.method == "POST"){
@@ -421,66 +480,6 @@ void process_http_request(ClientState &client, string request_body){
             }
         }
     }
-    else if(client.path.rfind("/api/file/", 0) == 0){
-        endpoint_defined = true;
-        if(client.method == "GET"){
-            method_allowed = true;
-            auth_required = true;
-            if(authenticate_user(client) == false){
-                client.write_buffer = create_401_response();
-                client.bytes_sent = 0;
-                return;
-            }
-            // NOTE: get safe filename
-            string encoded_filename = client.path.substr(10); // length of "/api/file/" is 10
-            string filename = url_decode(encoded_filename);
-            string file_path = "web/files/" + filename;
-            ifstream ifs(file_path, ios::binary);
-            if(ifs){
-                stringstream ss;
-                ss << ifs.rdbuf();
-                body = ss.str();
-                resource_exists = true;
-                everything_ok = true;
-                status_line = "HTTP/1.1 200 OK\r\n";
-                content_type = "Content-Type: " + get_MIME_type(filename) + "\r\n";
-            }
-            else{
-                resource_exists = false;
-            }
-        }
-    }
-    else if(client.path.rfind("/api/video/", 0) == 0){
-        endpoint_defined = true;
-        if(client.method == "GET"){
-            method_allowed = true;
-            auth_required = true;
-            if(authenticate_user(client) == false){
-                client.write_buffer = create_401_response();
-                client.bytes_sent = 0;
-                return;
-            }
-            // NOTE: get safe video name
-            string encoded_filename = client.path.substr(11); // length of "/api/video/" is 11
-            string filename = url_decode(encoded_filename);
-            string file_path = "web/videos/" + filename;
-            cout << "filepath: " << file_path << endl;
-            ifstream ifs(file_path, ios::binary);
-            if(ifs){
-                stringstream ss;
-                ss << ifs.rdbuf();
-                body = ss.str();
-                resource_exists = true;
-                everything_ok = true;
-                status_line = "HTTP/1.1 200 OK\r\n";
-                content_type = "Content-Type: " + get_MIME_type(filename) + "\r\n";
-            }
-            else{
-                resource_exists = false;
-            }
-        }
-    }
-    
     
     if(!endpoint_defined){
         client.write_buffer = create_404_response();
