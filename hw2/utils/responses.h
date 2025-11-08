@@ -5,6 +5,7 @@
 
 std::string create_401_response();
 std::string create_404_response();
+std::string create_405_response();
 std::string create_500_response();
 
 #endif // RESPONSES_H

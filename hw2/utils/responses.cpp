@@ -30,6 +30,18 @@ string create_404_response(){
     return response;
 }
 
+string create_405_response(){
+    string body = "Method Not Allowed\n";
+    string response;
+    response += "HTTP/1.1 405 Method Not Allowed\r\n";
+    response += "Server: CN2025Server/1.0\r\n";
+    response += "Content-Type: text/plain\r\n";
+    response += "Content-Length: " + to_string(body.length()) + "\r\n";
+    response += "\r\n";
+    response += body;
+    return response;
+}
+
 string create_500_response(){
     string response;
     response += "HTTP/1.1 500 Internal Server Error\r\n";
