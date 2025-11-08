@@ -222,12 +222,7 @@ void process_http_request(ClientState &client, string request_body){
         endpoint_defined = true;
         if(client.method == "GET"){
             method_allowed = true;
-            auth_required = true;
-            if(authenticate_user(client) == false){
-                client.write_buffer = create_401_response();
-                client.bytes_sent = 0;
-                return;
-            }
+            auth_required = false;
             // NOTE: get safe filename
             string encoded_filename = client.path.substr(10); // length of "/api/file/" is 10
             string filename = url_decode(encoded_filename);
@@ -252,12 +247,7 @@ void process_http_request(ClientState &client, string request_body){
         endpoint_defined = true;
         if(client.method == "GET"){
             method_allowed = true;
-            auth_required = true;
-            if(authenticate_user(client) == false){
-                client.write_buffer = create_401_response();
-                client.bytes_sent = 0;
-                return;
-            }
+            auth_required = false;
             // NOTE: get safe video name
             string encoded_filename = client.path.substr(11); // length of "/api/video/" is 11
             string filename = url_decode(encoded_filename);
