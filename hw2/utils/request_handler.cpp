@@ -234,6 +234,7 @@ void process_http_request(ClientState &client, string request_body){
             string file_path = "web/files/" + filename;
             ifstream ifs(file_path, ios::binary);
             if(ifs){
+                printf("filepath: %s\n", file_path.c_str());
                 stringstream ss;
                 ss << ifs.rdbuf();
                 body = ss.str();
