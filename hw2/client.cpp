@@ -32,7 +32,6 @@ int g_port;
 string g_auth_credential;
 
 bool connect_to_server() {
-bool connect_to_server() {
     if (g_server_fd != -1) {
         close(g_server_fd);
         g_server_fd = -1;
@@ -40,7 +39,6 @@ bool connect_to_server() {
 
     struct addrinfo hints, *res, *p;
     int status;
-    char ipstr[INET6_ADDRSTRLEN];
 
     memset(&hints, 0, sizeof hints);
     hints.ai_family = AF_UNSPEC; 
@@ -109,7 +107,7 @@ HttpResponse recv_and_parse_http_response(int socket_fd){
 
     // NOTE: receive header
     int bytes_received;
-    while(bytes_received = recv(socket_fd, buffer, sizeof(buffer), 0)){
+    while((bytes_received = recv(socket_fd, buffer, sizeof(buffer), 0)) > 0){
         buffer[bytes_received] = '\0';
         raw_response.append(buffer);
         // NOTE: check whether header is fully received
