@@ -107,8 +107,7 @@ HttpResponse recv_and_parse_http_response(int socket_fd){
     // NOTE: receive header
     int bytes_received;
     while((bytes_received = recv(socket_fd, buffer, sizeof(buffer), 0)) > 0){
-        buffer[bytes_received] = '\0';
-        raw_response.append(buffer);
+        raw_response.append(buffer, bytes_received);
         // NOTE: check whether header is fully received
         if(raw_response.find("\r\n\r\n") != string::npos){
             break; 
@@ -178,8 +177,7 @@ HttpResponse recv_and_parse_http_response(int socket_fd){
             response.status_code = -1; // 
             return response;
         }
-        buffer[bytes_received] = '\0';
-        body_part.append(buffer);
+        body_part.append(buffer, bytes_received);
         current_body_length += bytes_received;
     }
     response.body = body_part;
@@ -253,8 +251,13 @@ int main(int argc, char *argv[]) {
         } 
         else if (cmd == "get") {
             string filename;
+            string linepart;
             // NOTE: send to server
             if(ss >> filename){
+                // NOTE: the filename may contain spaces
+                while(ss >> linepart){
+                    filename += " " + linepart;
+                }
                 if(g_server_fd == -1){
                     if(!connect_to_server()){
                         cout << "Command failed. Cannot reconnect to server." << endl;
@@ -276,10 +279,13 @@ int main(int argc, char *argv[]) {
                 // NOTE: receive response
                 HttpResponse response = recv_and_parse_http_response(g_server_fd);
                 if(response.status_code == 200){
-                    mkdir("hw2", 0755); 
-                    mkdir("hw2/files", 0755);
-                    
-                    ofstream outfile("hw2/files/" + filename, ios::binary);
+                    // Create files directory if it doesn't exist
+                    mkdir("files", 0755);
+                    ofstream outfile("files/" + filename, ios::binary);
+                    if(outfile.fail()){
+                        cout << "Command failed. Cannot create local file." << endl;
+                        continue;
+                    }
                     outfile.write(response.body.c_str(), response.body.size());
                     outfile.close();
                     cout << "Command succeeded." << endl;
@@ -348,7 +354,7 @@ int main(int argc, char *argv[]) {
             string boundary = generate_boundary();
             stringstream body_ss;
             body_ss << "--" << boundary << "\r\n";
-            body_ss << "Content-Disposition: form-data; name=\"file\"; filename=\"" << basename << "\"\r\n";
+            body_ss << "Content-Disposition: form-data; name=\"upfile\"; filename=\"" << basename << "\"\r\n";
             body_ss << "Content-Type: application/octet-stream\r\n";
             body_ss << "\r\n";
             body_ss.write(file_content.c_str(), file_content.length());
