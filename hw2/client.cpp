@@ -76,7 +76,6 @@ bool connect_to_server() {
         return false;
     }
 
-    cout << "Connected to " << g_host << ":" << g_port << endl;
     return true;
 }
 string build_http_request(const string &method, const string &path, const map<string, string> &headers, const string &body="") {
@@ -221,7 +220,7 @@ string generate_boundary() {
 int main(int argc, char *argv[]) {
     // NOTE: argument parsing check 
     if (argc < 3 || argc > 4) {
-        cerr << "Usage: ./client [host] [port] [username:password]" << endl; // 
+        cout << "Usage: ./client [host] [port] [username:password]" << endl; // 
         return -1; // 
     }
 
@@ -230,7 +229,6 @@ int main(int argc, char *argv[]) {
     
     if (argc == 4) {
         g_auth_credential = argv[3]; // 
-        cout << "Credentials provided: " << g_auth_credential << endl;
     }
 
     if (!connect_to_server()) {
@@ -240,7 +238,7 @@ int main(int argc, char *argv[]) {
     // NOTE: interactive command loop
     string line;
     while (true) {
-        cout << "> "; // 
+        cout << "> " << flush; // 
         if (!getline(cin, line)) {
             break; // EOF (e.g., Ctrl+D)
         }
@@ -259,7 +257,7 @@ int main(int argc, char *argv[]) {
             if(ss >> filename){
                 if(g_server_fd == -1){
                     if(!connect_to_server()){
-                        cerr << "Command failed. Cannot reconnect to server." << endl;
+                        cout << "Command failed. Cannot reconnect to server." << endl;
                         continue;
                     }
                 }
@@ -272,7 +270,7 @@ int main(int argc, char *argv[]) {
                     perror("send");
                     close(g_server_fd);
                     g_server_fd = -1;
-                    cerr << "Command failed. Send error." << endl;
+                    cout << "Command failed. Send error." << endl;
                     continue;
                 }
                 // NOTE: receive response
@@ -287,17 +285,17 @@ int main(int argc, char *argv[]) {
                     cout << "Command succeeded." << endl;
                 }
                 else if(response.status_code == 404){
-                    cerr << "Command failed. File not found on server." << endl;
+                    cout << "Command failed. File not found on server." << endl;
                 }
                 else if(response.status_code == 500){
-                    cerr << "Command failed. Internal server error." << endl;
+                    cout << "Command failed. Internal server error." << endl;
                 }
                 else if(response.status_code == -1){
-                    cerr << "Command failed. Connection error." << endl;
+                    cout << "Command failed. Connection error." << endl;
                     g_server_fd = -1;
                 }
                 else{
-                    cerr << "Command failed. Server returned status " << response.status_code << endl;
+                    cout << "Command failed. Server returned status " << response.status_code << endl;
                 }
                 if (response.connection_close) {
                     close(g_server_fd);
@@ -305,49 +303,55 @@ int main(int argc, char *argv[]) {
                 }
             }
             else {
-                cerr << "Usage: get [file]" << endl; // 
+                cout << "Usage: get [file]" << endl; // 
             }
         } 
         else if (cmd == "put" || cmd == "putv") {
             string filename;
             string linepart;
             // NOTE: send to server
-            if(!(ss >> filename)){
+            if(ss >> filename){
+                // Check if there are more parts (filename with spaces)
                 while(ss >> linepart){
-                    filename += linepart + " ";
+                    filename += " " + linepart;
                 }
-
-                if(filename.empty()){
-                    if(cmd == "put"){
-                        cerr << "Usage: put [file]" << endl; 
-                    }
-                    else{
-                        cerr << "Usage: putv [file]" << endl; 
-                    }
-                    continue;
+            }
+            else {
+                if(cmd == "put"){
+                    cout << "Usage: put [file]" << endl; 
                 }
-                filename = filename.substr(1);
+                else{
+                    cout << "Usage: putv [file]" << endl; 
+                }
+                continue;
             }
             // NOTE: read file from local
             string file_content = read_file_binary(filename);
             if(file_content.empty()){
-                cerr << "Command failed. File not found on local." << endl; 
+                cout << "Command failed. File not found on local." << endl; 
                 continue;
             }
             if(g_server_fd == -1){
                 if(!connect_to_server()){
-                    cerr << "Command failed. Cannot reconnect to server." << endl;
+                    cout << "Command failed. Cannot reconnect to server." << endl;
                     continue;
                 }
             }
             // NOTE: build multipart/form-data body
+            // Extract basename from filename (in case it contains a path)
+            string basename = filename;
+            size_t last_slash = filename.find_last_of("/\\");
+            if (last_slash != string::npos) {
+                basename = filename.substr(last_slash + 1);
+            }
+            
             string boundary = generate_boundary();
             stringstream body_ss;
             body_ss << "--" << boundary << "\r\n";
-            body_ss << "Content-Disposition: form-data; name=\"file\"; filename=\"" << filename << "\"\r\n";
+            body_ss << "Content-Disposition: form-data; name=\"file\"; filename=\"" << basename << "\"\r\n";
             body_ss << "Content-Type: application/octet-stream\r\n";
             body_ss << "\r\n";
-            body_ss << file_content; 
+            body_ss.write(file_content.c_str(), file_content.length());
             body_ss << "\r\n";
             body_ss << "--" << boundary << "--\r\n";
             string body = body_ss.str();
@@ -367,7 +371,7 @@ int main(int argc, char *argv[]) {
                 perror("send");
                 close(g_server_fd);
                 g_server_fd = -1;
-                cerr << "Command failed. Send error." << endl;
+                cout << "Command failed. Send error." << endl;
                 continue;
             }
             HttpResponse response = recv_and_parse_http_response(g_server_fd);
@@ -375,16 +379,16 @@ int main(int argc, char *argv[]) {
                 cout << "Command succeeded." << endl;
             }
             else if(response.status_code == 401){
-                cerr << "Command failed. Invalid user or wrong password." << endl;
+                cout << "Command failed. Invalid user or wrong password." << endl;
             }
             else if(response.status_code == 404){
-                cerr << "Command failed. File not found on server." << endl;
+                cout << "Command failed. File not found on server." << endl;
             } 
             else if (response.status_code == -1) {
-                 cerr << "Command failed. Connection error." << endl;
+                 cout << "Command failed. Connection error." << endl;
                  g_server_fd = -1; 
             } else {
-                cerr << "Command failed. Server returned status " << response.status_code << endl;
+                cout << "Command failed. Server returned status " << response.status_code << endl;
             }
             if(response.connection_close){
                 close(g_server_fd);
@@ -398,11 +402,11 @@ int main(int argc, char *argv[]) {
                 cout << "Command succeeded." << endl;
             }
             else{
-                cerr << "Usage: auth [username:password]" << endl;
+                cout << "Usage: auth [username:password]" << endl;
             }
         } 
         else if (!cmd.empty()) {
-            cerr << "Command Not Found." << endl; // 
+            cout << "Command not found." << endl; // 
         }
     }
     if (g_server_fd != -1) {
