@@ -395,12 +395,11 @@ int main(int argc, char *argv[]) {
             string credential;
             if (ss >> credential){
                 g_auth_credential = credential;
-                cout << "Command succeeded ." << endl;
+                cout << "Command succeeded." << endl;
             }
             else{
                 cerr << "Usage: auth [username:password]" << endl;
             }
-            cout << "Command 'auth' not implemented yet." << endl;
         } 
         else if (!cmd.empty()) {
             cerr << "Command Not Found." << endl; // 
